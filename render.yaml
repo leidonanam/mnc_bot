@@ -2,7 +2,8 @@ services:
   - type: web
     name: telegram-bot
     env: python
-    pythonVersion: 3.9
+    pythonVersion: 3.11
     buildCommand: |
+      pip install --upgrade pip
       pip install -r requirements.txt
     startCommand: python crypto_bot.py
