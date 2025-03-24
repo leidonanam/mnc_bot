@@ -2,5 +2,6 @@ services:
   - type: web
     name: telegram-bot
     env: python
+    pythonVersion: 3.9
     buildCommand: pip install -r requirements.txt
     startCommand: python crypto_bot.py
