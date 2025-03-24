@@ -1,5 +1,5 @@
-requests==2.31.0
-telebot==0.5.4
-Flask==2.3.3
-pytz==2023.3
-python-dotenv==1.0.0
+requests
+telebot
+Flask
+pytz
+python-dotenv
