@@ -2,5 +2,5 @@ services:
   - type: web
     name: telegram-bot
     env: python
-    buildCommand: pip install -r flask
+    buildCommand: pip install Flask
     startCommand: python crypto_bot.py
