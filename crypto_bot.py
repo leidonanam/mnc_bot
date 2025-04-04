@@ -4,7 +4,7 @@ import time
 import telebot
 import logging
 from threading import Thread
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask
 import pytz
 
@@ -35,7 +35,7 @@ def run():
 def keep_alive():
     t = Thread(target=run)
     t.start()
-    
+
 # === Lệnh /help ===
 @bot.message_handler(commands=['help'])
 def send_help(message):
@@ -44,7 +44,8 @@ def send_help(message):
         "/start - Bắt đầu bot\n"
         "/status - Kiểm tra trạng thái bot\n"
         "/p [coin] [khung thời gian] - Xem giá và % thay đổi của coin\n"
-        "Ví dụ: /p BTC ETH 15m (xem giá BTC & ETH, thay đổi so với 15 phút trước)")
+        "Ví dụ: /p BTC ETH dom 15m (xem giá BTC, ETH & BTC Dominance, thay đổi so với 15 phút trước)"
+    )
     bot.send_message(message.chat.id, help_text)
 
 # === Lệnh /start ===
@@ -79,12 +80,12 @@ def get_price_change(message):
         reply_texts = []
 
         for coin in coins:
-            if coin == "BTC.D":
+            if coin in {"BTC.D", "DOM"}:  # Kiểm tra BTC Dominance
                 btc_dominance = get_btc_dominance()
                 if btc_dominance is None:
                     reply_texts.append("⚠️ Không thể lấy dữ liệu BTC Dominance!")
                 else:
-                    reply_texts.append(f"📊 BTC Dominance hiện tại: {btc_dominance:.2f}%")
+                    reply_texts.append(f"📊 BTC Dominance hiện tại: {btc_dominance:.2f}% (khung thời gian: {timeframe})")
             else:
                 url = f"https://api.mexc.com/api/v3/ticker/24hr?symbol={coin}USDT"
                 response = requests.get(url)
@@ -97,7 +98,6 @@ def get_price_change(message):
                     reply_texts.append(f"💰 {coin}: {last_price:.4f} USDT ({price_change_percent:+.2f}%)")
 
         msg = bot.reply_to(message, "\n".join(reply_texts))
-
         time.sleep(30)  # Xóa sau 30 giây
         bot.delete_message(message.chat.id, msg.message_id)
         bot.delete_message(message.chat.id, message.message_id)
@@ -106,42 +106,62 @@ def get_price_change(message):
 
 bot.message_handler(commands=['p'])(get_price_change)
 
-# === Lệnh /fomo và /fud tự động chỉ trong khung giờ 21:30 - 06:00 ===
+# === Lệnh FOMO/FUD chỉ hoạt động từ 7h sáng đến 21h30 ===
 def check_price_changes():
     tz = pytz.timezone('Asia/Ho_Chi_Minh')
     now = datetime.now(tz).time()
-    start_time = datetime.strptime("21:30", "%H:%M").time()
-    end_time = datetime.strptime("06:00", "%H:%M").time()
+    start_time = datetime.strptime("07:00", "%H:%M").time()
+    end_time = datetime.strptime("21:30", "%H:%M").time()
 
-    if (start_time <= now or now <= end_time):  # Chỉ gửi thông báo trong khung giờ 21:30 - 06:00
-        url = "https://api.mexc.com/api/v3/ticker/24hr"
-        response = requests.get(url)
-        if response.status_code != 200:
-            return
-
-        data = response.json()
+    # Chỉ gửi thông báo trong khung giờ từ 7:00 - 21:30
+    if start_time <= now <= end_time:
+        url = "https://api.mexc.com/api/v3/klines"
         alerts = []
-        for coin in data:
-            symbol = coin["symbol"]
-            if symbol.endswith("USDT"):
-                coin_name = symbol.replace("USDT", "")
-                price_change_percent = float(coin["priceChangePercent"])
 
-                if coin_name in WATCHLIST and abs(price_change_percent) >= 5:
+        for coin in WATCHLIST:
+            try:
+                # Gửi yêu cầu lấy dữ liệu trong khung thời gian 10 phút (2 nến)
+                params = {
+                    "symbol": f"{coin}USDT",
+                    "interval": "5m",
+                    "limit": 2  # Lấy 2 nến gần nhất (10 phút)
+                }
+                response = requests.get(url, params=params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+
+                if len(data) < 2:
+                    logging.warning(f"Dữ liệu không đủ cho {coin} trong khung 10 phút.")
+                    continue
+
+                # Lấy thông tin giá từ 2 nến gần nhất
+                prev_candle = data[-2]
+                current_candle = data[-1]
+                open_price = float(prev_candle[1])  # Giá mở nến trước
+                close_price = float(current_candle[4])  # Giá đóng nến hiện tại
+
+                # Tính biến động giá theo phần trăm
+                price_change_percent = ((close_price - open_price) / open_price) * 100
+
+                # Gửi cảnh báo nếu biến động vượt 5%
+                if abs(price_change_percent) > 5:
                     alert_type = "🚀 FOMO 🚀" if price_change_percent > 0 else "😱 FUD 😱"
-                    message = bot.send_message(CHAT_ID, f"{alert_type} {coin_name} biến động {price_change_percent:+.2f}% trong 5 phút!")
-                    time.sleep(60)  # Chờ 60 giây rồi xóa tin nhắn
-                    bot.delete_message(CHAT_ID, message.message_id)
+                    bot.send_message(
+                        CHAT_ID,
+                        f"{alert_type} {coin} biến động {price_change_percent:+.2f}% trong 10 phút!"
+                    )
+            except requests.RequestException as e:
+                logging.error(f"Lỗi khi truy vấn dữ liệu cho {coin}: {e}")
+            except Exception as e:
+                logging.error(f"Lỗi không mong muốn khi xử lý {coin}: {e}")
 
-# Kiểm tra biến động giá mỗi 5 phút
 def start_price_monitor():
     while True:
-        check_price_changes()
-        time.sleep(300)  # 5 phút
+        check_price_changes()  # Kiểm tra biến động giá
+        time.sleep(600)  # Chu kỳ kiểm tra: mỗi 10 phút
 
 # Chạy theo dõi giá trong luồng riêng
 Thread(target=start_price_monitor, daemon=True).start()
-
 
 # === Chạy bot ===
 if __name__ == "__main__":
